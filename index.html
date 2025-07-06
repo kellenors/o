@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSINT NODES</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        .node-appear {
+            animation: nodeAppear 0.3s ease-out;
+        }
+        @keyframes nodeAppear {
+            from { transform: scale(0); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .link-draw {
+            animation: linkDraw 0.5s forwards;
+        }
+        @keyframes linkDraw {
+            from { stroke-dashoffset: 24; opacity: 0; }
+            to { stroke-dashoffset: 0; opacity: 1; }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .osint-card {
+            transition: all 0.2s ease;
+        }
+        .node-hover:hover {
+            filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.6));
+            transform: scale(1.05);
+        }
+        .selected-node {
+            filter: drop-shadow(0 0 12px rgba(220, 38, 38, 0.7));
+            transform: scale(1.1);
+        }
+        .arrow {
+            fill: #94a3b8;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const OSINTAnalyzer = () => {
+            const [activeTab, setActiveTab] = useState('graph');
+            const [nodes, setNodes] = useState([]);
+            const [links, setLinks] = useState([]);
+            const [selectedNode, setSelectedNode] = useState(null);
+            const [editingNode, setEditingNode] = useState(null);
+            const [showAddForm, setShowAddForm] = useState(false);
+            const [newNode, setNewNode] = useState({ type: 'person', label: '', details: '' });
+            const [newLink, setNewLink] = useState({ from: '', to: '', type: 'connection' });
+            const [selectedForConnection, setSelectedForConnection] = useState([]);
+            const graphRef = useRef(null);
+            const linkModalRef = useRef(null);
+
+
+            useEffect(() => {
+                if (graphRef.current) {
+                    renderGraph();
+                }
+            }, [nodes, links, selectedNode]);
+
+            const renderGraph = () => {
+                const width = graphRef.current.clientWidth;
+                const height = graphRef.current.clientHeight;
+                
+                d3.select(graphRef.current).selectAll("*").remove();
+                
+                const svg = d3.select(graphRef.current)
+                    .append("svg")
+                    .attr("width", width)
+                    .attr("height", height);
+                
+                const defs = svg.append("defs");
+                
+                defs.selectAll("marker")
+                    .data(["arrow"])
+                    .enter()
+                    .append("marker")
+                    .attr("id", d => d)
+                    .attr("viewBox", "0 -5 10 10")
+                    .attr("refX", 25)
+                    .attr("refY", 0)
+                    .attr("markerWidth", 6)
+                    .attr("markerHeight", 6)
+                    .attr("orient", "auto")
+                    .append("path")
+                    .attr("d", "M0,-5L10,0L0,5")
+                    .attr("class", "arrow");
+                
+                if (nodes.length > 0) {
+                    const simulation = d3.forceSimulation(nodes)
+                        .force("link", d3.forceLink(links).id(d => d.id).distance(150))
+                        .force("charge", d3.forceManyBody().strength(-300))
+                        .force("center", d3.forceCenter(width / 2, height / 2))
+                        .force("collision", d3.forceCollide().radius(50));
+                    
+                    const link = svg.selectAll(".link")
+                        .data(links)
+                        .enter()
+                        .append("line")
+                        .attr("class", "link-draw")
+                        .attr("stroke", "#94a3b8")
+                        .attr("stroke-width", 2)
+                        .attr("marker-end", d => "url(#arrow)");
+                    
+                    const node = svg.selectAll(".node")
+                        .data(nodes)
+                        .enter()
+                        .append("g")
+                        .attr("class", "node-appear")
+                        .attr("transform", d => `translate(${d.x || width/2}, ${d.y || height/2})`)
+                        .call(d3.drag()
+                            .on("start", dragStarted)
+                            .on("drag", dragged)
+                            .on("end", dragEnded));
+                    
+                    node.append("circle")
+                        .attr("r", 24)
+                        .attr("class", d => `node-hover cursor-pointer transition-all duration-200 ${
+                            d.type === 'ip' ? 'fill-blue-500' :
+                            d.type === 'email' ? 'fill-green-500' :
+                            d.type === 'domain' ? 'fill-purple-500' :
+                            d.type === 'person' ? 'fill-amber-500' : 
+                            d.type === 'organization' ? 'fill-red-500' :
+                            d.type === 'vk' ? 'fill-blue-600' :
+                            d.type === 'discord' ? 'fill-indigo-500' :
+                            d.type === 'telegram' ? 'fill-blue-400' :
+                            d.type === 'ok.ru' ? 'fill-orange-500' :
+                            d.type === 'facebook' ? 'fill-blue-700' :
+                            d.type === 'vimeworld' ? 'fill-green-600' :
+                            d.type === 'doxbin' ? 'fill-red-700' :
+                            d.type === 'instagram' ? 'fill-pink-600' :
+                            d.type === 'bank_card' ? 'fill-gray-600' : 'fill-pink-500'
+                        } ${selectedNode?.id === d.id ? 'selected-node' : ''}`)
+                        .on("click", (event, d) => {
+                            setSelectedNode(d);
+                            setEditingNode(null);
+                        });
+                    
+ 
+                    node.append("text")
+                        .attr("class", "pointer-events-none")
+                        .attr("text-anchor", "middle")
+                        .attr("dy", "0.35em")
+                        .attr("fill", "white")
+                        .attr("font-size", "12px")
+                        .text(d => {
+                            if (d.type === 'ip') return "IP";
+                            if (d.type === 'email') return "@";
+                            if (d.type === 'domain') return "D";
+                            if (d.type === 'person') return "P";
+                            if (d.type === 'organization') return "ORG";
+                            if (d.type === 'vk') return "VK";
+                            if (d.type === 'discord') return "DC";
+                            if (d.type === 'telegram') return "TG";
+                            if (d.type === 'ok.ru') return "OK";
+                            if (d.type === 'facebook') return "FB";
+                            if (d.type === 'vimeworld') return "VW";
+                            if (d.type === 'doxbin') return "DB";
+                            if (d.type === 'instagram') return "IG";
+                            if (d.type === 'bank_card') return "$$";
+                            return "?";
+                        });
+                    
+
+                    node.append("text")
+                        .attr("class", "text-xs font-medium fill-gray-800 pointer-events-none")
+                        .attr("dy", 34)
+                        .attr("text-anchor", "middle")
+                        .text(d => d.label);
+                    
+
+                    link.append("title")
+                        .text(d => d.type);
+                    
+
+                    simulation.on("tick", () => {
+                        link
+                            .attr("x1", d => d.source.x)
+                            .attr("y1", d => d.source.y)
+                            .attr("x2", d => d.target.x)
+                            .attr("y2", d => d.target.y);
+                        
+                        node
+                            .attr("transform", d => `translate(${d.x},${d.y})`);
+                    });
+                    
+
+                    function dragStarted(event, d) {
+                        if (!event.active) simulation.alphaTarget(0.3).restart();
+                        d.fx = d.x;
+                        d.fy = d.y;
+                    }
+                    
+                    function dragged(event, d) {
+                        d.fx = event.x;
+                        d.fy = event.y;
+                    }
+                    
+                    function dragEnded(event, d) {
+                        if (!event.active) simulation.alphaTarget(0);
+                        d.fx = null;
+                        d.fy = null;
+                    }
+                } else {
+
+                    svg.append("text")
+                        .attr("x", width / 2)
+                        .attr("y", height / 2)
+                        .attr("text-anchor", "middle")
+                        .attr("fill", "#9CA3AF")
+                        .text("Добавьте элементы для визуализации");
+                }
+            };
+
+
+            const handleAddNode = (e) => {
+                e.preventDefault();
+                if (!newNode.label.trim()) return;
+                
+                const nodeId = `node-${Date.now()}`;
+                const newNodeObj = {
+                    id: nodeId,
+                    ...newNode
+                };
+                
+                setNodes([...nodes, newNodeObj]);
+                setNewNode({ type: 'person', label: '', details: '' });
+                setShowAddForm(false);
+                setSelectedNode(newNodeObj);
+            };
+
+
+            const handleAddLink = (e) => {
+                e.preventDefault();
+                if (!newLink.from || !newLink.to) return;
+                
+                const linkId = `link-${Date.now()}`;
+                const newLinkObj = {
+                    id: linkId,
+                    source: newLink.from,
+                    target: newLink.to,
+                    type: newLink.type
+                };
+                
+                setLinks([...links, newLinkObj]);
+                setNewLink({ from: '', to: '', type: 'connection' });
+                linkModalRef.current.close();
+                setSelectedForConnection([]);
+            };
+
+
+            const handleDeleteNode = (id) => {
+                setNodes(nodes.filter(node => node.id !== id));
+                setLinks(links.filter(link => link.source !== id && link.target !== id));
+                if (selectedNode?.id === id) setSelectedNode(null);
+            };
+
+
+            const handleDeleteLink = (id) => {
+                setLinks(links.filter(link => link.id !== id));
+            };
+
+
+            const handleUpdateNode = (e) => {
+                e.preventDefault();
+                if (!editingNode.label.trim()) return;
+                
+                setNodes(nodes.map(node => 
+                    node.id === editingNode.id ? editingNode : node
+                ));
+                setSelectedNode(editingNode);
+                setEditingNode(null);
+            };
+
+            const handleSelectForConnection = (id) => {
+                if (selectedForConnection.includes(id)) {
+                    setSelectedForConnection(selectedForConnection.filter(i => i !== id));
+                } else if (selectedForConnection.length < 2) {
+                    setSelectedForConnection([...selectedForConnection, id]);
+                }
+                
+                if (selectedForConnection.length === 1) {
+                    setNewLink({
+                        ...newLink,
+                        from: selectedForConnection[0],
+                        to: id
+                    });
+                    linkModalRef.current.showModal();
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+                    {/* Шапка */}
+                    <header className="bg-white shadow-sm">
+                        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+                            <div className="flex items-center">
+                                <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center">
+                                    <span className="text-white font-bold">OS</span>
+                                </div>
+                                <div className="ml-3">
+                                    <h1 className="text-2xl font-bold text-gray-800">OSINT NODES</h1>
+                                    <div className="text-sm text-gray-600">
+                                        Made by <a href="https://t.me/Kellenors" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800 hover:underline">Kellenors</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex space-x-4">
+                                <button 
+                                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                                    onClick={() => setShowAddForm(true)}
+                                >
+                                    + Новый элемент
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Основной контент */}
+                    <main className="max-w-7xl mx-auto px-4 py-8">
+                        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                            {/* Левая панель - Список элементов */}
+                            <div className="lg:col-span-1 bg-white rounded-xl shadow-md p-6 h-fit">
+                                <h2 className="text-xl font-bold text-gray-800 mb-4">Все элементы</h2>
+                                
+                                <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+                                    {nodes.map(node => (
+                                        <div 
+                                            key={node.id}
+                                            className={`osint-card p-4 rounded-lg border cursor-pointer transition-all ${
+                                                selectedNode?.id === node.id 
+                                                    ? 'border-indigo-500 bg-indigo-50' 
+                                                    : 'border-gray-200 hover:border-indigo-300'
+                                            } ${
+                                                selectedForConnection.includes(node.id)
+                                                    ? 'ring-2 ring-indigo-500'
+                                                    : ''
+                                            }`}
+                                            onClick={() => {
+                                                setSelectedNode(node);
+                                                setEditingNode(null);
+                                            }}
+                                        >
+                                            <div className="flex justify-between">
+                                                <div className="flex items-center">
+                                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                                                        node.type === 'ip' ? 'bg-blue-500' :
+                                                        node.type === 'email' ? 'bg-green-500' :
+                                                        node.type === 'domain' ? 'bg-purple-500' :
+                                                        node.type === 'person' ? 'bg-amber-500' : 
+                                                        node.type === 'organization' ? 'bg-red-500' : 'bg-pink-500'
+                                                    }`}>
+                                                        <span className="text-white text-xs">
+                                                            {node.type === 'ip' ? "IP" :
+                                                            node.type === 'email' ? "@" :
+                                                            node.type === 'domain' ? "D" :
+                                                            node.type === 'person' ? "P" :
+                                                            node.type === 'organization' ? "ORG" :
+                                                            node.type === 'vk' ? "VK" :
+                                                            node.type === 'discord' ? "DC" :
+                                                            node.type === 'telegram' ? "TG" :
+                                                            node.type === 'ok.ru' ? "OK" :
+                                                            node.type === 'facebook' ? "FB" :
+                                                            node.type === 'vimeworld' ? "VW" :
+                                                            node.type === 'doxbin' ? "DB" :
+                                                            node.type === 'instagram' ? "IG" :
+                                                            node.type === 'bank_card' ? "$$" : "?"}
+                                                        </span>
+                                                    </div>
+                                                    <div className="ml-3">
+                                                        <div className="font-medium text-gray-800">{node.label}</div>
+                                                        <div className="text-xs text-gray-500">{node.type}</div>
+                                                    </div>
+                                                </div>
+                                                <button 
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleSelectForConnection(node.id);
+                                                    }}
+                                                    className={`p-1 rounded ${
+                                                        selectedForConnection.includes(node.id)
+                                                            ? 'bg-indigo-500 text-white'
+                                                            : 'text-gray-400 hover:bg-gray-100'
+                                                    }`}
+                                                    title="Создать связь"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    
+                                    {nodes.length === 0 && (
+                                        <div className="text-center py-8 text-gray-500">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            </svg>
+                                            <p className="mt-2">Элементы не добавлены</p>
+                                            <button 
+                                                className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                                                onClick={() => setShowAddForm(true)}
+                                            >
+                                                Добавить первый элемент
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                <div className="mt-6">
+                                    <h3 className="font-bold text-gray-700 mb-2">Действия</h3>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button 
+                                            className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
+                                            onClick={() => setShowAddForm(true)}
+                                        >
+                                            Добавить элемент
+                                        </button>
+                                        <button 
+                                            className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm"
+                                            onClick={() => setSelectedForConnection([])}
+                                            disabled={selectedForConnection.length === 0}
+                                        >
+                                            Сбросить выбор
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Центральная область - Граф и детали */}
+                            <div className="lg:col-span-3">
+                                {/* Контейнер для графа */}
+                                <div className="bg-white rounded-xl shadow-md overflow-hidden">
+                                    <div 
+                                        ref={graphRef} 
+                                        className="w-full h-[500px] bg-gradient-to-br from-gray-50 to-gray-100"
+                                    ></div>
+                                </div>
+
+                                {/* Панель деталей */}
+                                {selectedNode && !editingNode && (
+                                    <div className="mt-6 bg-white rounded-xl shadow-md p-6 fade-in">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <div className="flex items-center">
+                                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                                                        selectedNode.type === 'ip' ? 'bg-blue-500' :
+                                                        selectedNode.type === 'email' ? 'bg-green-500' :
+                                                        selectedNode.type === 'domain' ? 'bg-purple-500' :
+                                                        selectedNode.type === 'person' ? 'bg-amber-500' : 
+                                                        selectedNode.type === 'organization' ? 'bg-red-500' : 'bg-pink-500'
+                                                    }`}>
+                                                        <span className="text-white text-sm">
+                                                            {selectedNode.type === 'ip' ? "IP" :
+                                                            selectedNode.type === 'email' ? "@" :
+                                                            selectedNode.type === 'domain' ? "D" :
+                                                            selectedNode.type === 'person' ? "P" :
+                                                            selectedNode.type === 'organization' ? "ORG" : "?"}
+                                                        </span>
+                                                    </div>
+                                                    <div className="ml-4">
+                                                        <h3 className="text-lg font-bold text-gray-800">{selectedNode.label}</h3>
+                                                        <p className="text-gray-600 mt-1 capitalize">{selectedNode.type}</p>
+                                                    </div>
+                                                </div>
+                                                
+                                                {selectedNode.details && (
+                                                    <div className="mt-4">
+                                                        <h4 className="font-medium text-gray-700 mb-1">Описание</h4>
+                                                        <p className="text-gray-600">{selectedNode.details}</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="flex space-x-2">
+                                                <button 
+                                                    onClick={() => setEditingNode({...selectedNode})}
+                                                    className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                                                    title="Редактировать"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                                    </svg>
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleDeleteNode(selectedNode.id)}
+                                                    className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                                                    title="Удалить"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="mt-6">
+                                            <div className="flex justify-between items-center mb-3">
+                                                <h4 className="font-medium text-gray-700">Связи</h4>
+                                                <button 
+                                                    className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center"
+                                                    onClick={() => handleSelectForConnection(selectedNode.id)}
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                                                    </svg>
+                                                    Добавить связь
+                                                </button>
+                                            </div>
+                                            
+                                            {links.filter(l => l.source === selectedNode.id || l.target === selectedNode.id).length > 0 ? (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                    {links.filter(l => l.source === selectedNode.id || l.target === selectedNode.id)
+                                                        .map((link, index) => {
+                                                            const targetId = link.source === selectedNode.id ? link.target : link.source;
+                                                            const targetNode = nodes.find(n => n.id === targetId);
+                                                            const direction = link.source === selectedNode.id ? '→' : '←';
+                                                            
+                                                            return (
+                                                                <div 
+                                                                    key={index} 
+                                                                    className="osint-card border border-gray-200 rounded-lg p-4 hover:border-indigo-300"
+                                                                >
+                                                                    <div className="flex justify-between">
+                                                                        <div className="flex items-center">
+                                                                            <div className={`w-8 h-8 rounded-full ${
+                                                                                targetNode.type === 'ip' ? 'bg-blue-500' :
+                                                                                targetNode.type === 'email' ? 'bg-green-500' :
+                                                                                targetNode.type === 'domain' ? 'bg-purple-500' :
+                                                                                targetNode.type === 'person' ? 'bg-amber-500' : 
+                                                                                targetNode.type === 'organization' ? 'bg-red-500' : 'bg-pink-500'
+                                                                            } flex items-center justify-center`}>
+                                                                                <span className="text-white text-xs">
+                                                                                    {targetNode.type === 'ip' ? "IP" :
+                                                                                    targetNode.type === 'email' ? "@" :
+                                                                                    targetNode.type === 'domain' ? "D" :
+                                                                                    targetNode.type === 'person' ? "P" :
+                                                                                    targetNode.type === 'organization' ? "ORG" : "?"}
+                                                                                </span>
+                                                                            </div>
+                                                                            <div className="ml-3">
+                                                                                <div className="font-medium text-gray-800">{targetNode.label}</div>
+                                                                                <div className="text-xs text-gray-500">{targetNode.type}</div>
+                                                                            </div>
+                                                                        </div>
+                                                                        <button 
+                                                                            onClick={() => handleDeleteLink(link.id)}
+                                                                            className="p-1 text-gray-400 hover:text-red-500"
+                                                                            title="Удалить связь"
+                                                                        >
+                                                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                                            </svg>
+                                                                        </button>
+                                                                    </div>
+                                                                    <div className="mt-3 flex items-center text-sm text-gray-600">
+                                                                        <div className="font-medium mr-2">{direction}</div>
+                                                                        <div className="bg-indigo-100 text-indigo-800 px-2 py-1 rounded">
+                                                                            {link.type}
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })
+                                                    }
+                                                </div>
+                                            ) : (
+                                                <div className="text-center py-4 text-gray-500 border border-gray-200 rounded-lg bg-gray-50">
+                                                    Нет связанных элементов
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                {/* Форма редактирования элемента */}
+                                {editingNode && (
+                                    <div className="mt-6 bg-white rounded-xl shadow-md p-6 fade-in">
+                                        <h3 className="text-lg font-bold text-gray-800 mb-4">Редактирование элемента</h3>
+                                        
+                                        <form onSubmit={handleUpdateNode}>
+                                            <div className="space-y-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Тип элемента</label>
+                                                    <select 
+                                                        value={editingNode.type}
+                                                        onChange={e => setEditingNode({...editingNode, type: e.target.value})}
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                    >
+                                                        <option value="person">Персона</option>
+                                                        <option value="organization">Организация</option>
+                                                        <option value="email">Email</option>
+                                                        <option value="domain">Домен</option>
+                                                        <option value="ip">IP-адрес</option>
+                                                        <option value="phone">Телефон</option>
+                                                        <option value="location">Местоположение</option>
+                                                        <option value="other">Другое</option>
+                                                    </select>
+                                                </div>
+                                                
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Название элемента</label>
+                                                    <input 
+                                                        type="text" 
+                                                        value={editingNode.label}
+                                                        onChange={e => setEditingNode({...editingNode, label: e.target.value})}
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                        placeholder="Например: Иван Иванов"
+                                                        required
+                                                    />
+                                                </div>
+                                                
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Описание (необязательно)</label>
+                                                    <textarea 
+                                                        value={editingNode.details}
+                                                        onChange={e => setEditingNode({...editingNode, details: e.target.value})}
+                                                        rows="3"
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                        placeholder="Дополнительная информация..."
+                                                    ></textarea>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="mt-6 flex justify-end space-x-3">
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setEditingNode(null)}
+                                                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                                                >
+                                                    Отмена
+                                                </button>
+                                                <button 
+                                                    type="submit"
+                                                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                                                >
+                                                    Сохранить изменения
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </main>
+
+                    {/* Модальное окно добавления элемента */}
+                    {showAddForm && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-xl p-6 w-full max-w-md">
+                                <h3 className="text-xl font-bold text-gray-800 mb-4">Добавить новый элемент</h3>
+                                
+                                <form onSubmit={handleAddNode}>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Тип элемента</label>
+                                            <select 
+                                                value={newNode.type}
+                                                onChange={e => setNewNode({...newNode, type: e.target.value})}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                            >
+                                                <option value="person">Персона</option>
+                                                <option value="organization">Организация</option>
+                                                <option value="email">Email</option>
+                                                <option value="domain">Домен</option>
+                                                <option value="ip">IP-адрес</option>
+                                                <option value="phone">Телефон</option>
+                                                <option value="location">Местоположение</option>
+                                                <option value="vk">VK</option>
+                                                <option value="discord">Discord</option>
+                                                <option value="telegram">Telegram</option>
+                                                <option value="ok.ru">OK.ru</option>
+                                                <option value="facebook">Facebook</option>
+                                                <option value="vimeworld">VimeWorld</option>
+                                                <option value="doxbin">Doxbin</option>
+                                                <option value="instagram">Instagram</option>
+                                                <option value="bank_card">Банковская карта</option>
+                                                <option value="other">Другое</option>
+                                            </select>
+                                        </div>
+                                        
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Название элемента</label>
+                                            <input 
+                                                type="text" 
+                                                value={newNode.label}
+                                                onChange={e => setNewNode({...newNode, label: e.target.value})}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                placeholder="Например: Иван Иванов"
+                                                required
+                                                autoFocus
+                                            />
+                                        </div>
+                                        
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Описание (необязательно)</label>
+                                            <textarea 
+                                                value={newNode.details}
+                                                onChange={e => setNewNode({...newNode, details: e.target.value})}
+                                                rows="3"
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                placeholder="Дополнительная информация..."
+                                            ></textarea>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="mt-6 flex justify-end space-x-3">
+                                        <button 
+                                            type="button"
+                                            onClick={() => setShowAddForm(false)}
+                                            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                                        >
+                                            Отмена
+                                        </button>
+                                        <button 
+                                            type="submit"
+                                            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                                        >
+                                            Добавить элемент
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Модальное окно добавления связи */}
+                    <dialog ref={linkModalRef} className="bg-white rounded-xl p-6 w-full max-w-md">
+                        <h3 className="text-xl font-bold text-gray-800 mb-4">Добавить связь</h3>
+                        
+                        <form onSubmit={handleAddLink}>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">От</label>
+                                    <select 
+                                        value={newLink.from}
+                                        onChange={e => setNewLink({...newLink, from: e.target.value})}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        required
+                                    >
+                                        <option value="">Выберите элемент</option>
+                                        {nodes.map(node => (
+                                            <option key={node.id} value={node.id}>
+                                                {node.label} ({node.type})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">К</label>
+                                    <select 
+                                        value={newLink.to}
+                                        onChange={e => setNewLink({...newLink, to: e.target.value})}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        required
+                                    >
+                                        <option value="">Выберите элемент</option>
+                                        {nodes.map(node => (
+                                            <option key={node.id} value={node.id}>
+                                                {node.label} ({node.type})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Тип связи</label>
+                                    <input 
+                                        type="text" 
+                                        value={newLink.type}
+                                        onChange={e => setNewLink({...newLink, type: e.target.value})}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        placeholder="Например: работает в"
+                                        required
+                                    />
+                                </div>
+                            </div>
+                            
+                            <div className="mt-6 flex justify-end space-x-3">
+                                <button 
+                                    type="button"
+                                    onClick={() => linkModalRef.current.close()}
+                                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                                >
+                                    Отмена
+                                </button>
+                                <button 
+                                    type="submit"
+                                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                                >
+                                    Создать связь
+                                </button>
+                            </div>
+                        </form>
+                    </dialog>
+                </div>
+            );
+        };
+
+        
+        ReactDOM.render(<OSINTAnalyzer />, document.getElementById('root'));
+    </script>
+</body>
+</html>
